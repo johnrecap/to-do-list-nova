@@ -1,0 +1,338 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id                String   @id @default(cuid())
+  email             String   @unique
+  name              String?
+  avatar            String?
+  timezone          String   @default("UTC")
+  language          String   @default("en")
+  theme             String   @default("light")
+  isPremium         Boolean  @default(false)
+  emailVerified     DateTime?
+  twoFactorEnabled  Boolean  @default(false)
+  twoFactorSecret   String?
+  lastLoginAt       DateTime?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  
+  // Relations
+  projects          Project[]
+  projectMemberships ProjectMember[]
+  tasks             Task[] @relation("TaskCreator")
+  assignedTasks     Task[] @relation("TaskAssignee")
+  comments          Comment[]
+  notifications     Notification[]
+  userSessions      UserSession[]
+  userPreferences   UserPreferences?
+  habits            Habit[]
+  focusSessions     FocusSession[]
+  apiKeys           ApiKey[]
+  
+  @@map("users")
+}
+
+model UserPreferences {
+  id                String @id @default(cuid())
+  userId            String @unique
+  defaultView       String @default("list") // list, kanban, calendar
+  itemsPerPage      Int    @default(25)
+  showCompleted     Boolean @default(true)
+  soundEnabled      Boolean @default(true)
+  notificationsEnabled Boolean @default(true)
+  autoArchiveDays   Int    @default(30)
+  workingHoursStart String @default("09:00")
+  workingHoursEnd   String @default("17:00")
+  workingDays       String @default("1,2,3,4,5") // Monday-Friday
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  
+  user              User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@map("user_preferences")
+}
+
+model UserSession {
+  id        String   @id @default(cuid())
+  userId    String
+  token     String   @unique
+  deviceInfo String?
+  ipAddress String?
+  userAgent String?
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@map("user_sessions")
+}
+
+model Project {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  color       String?
+  icon        String?
+  isPublic    Boolean  @default(false)
+  isArchived  Boolean  @default(false)
+  ownerId     String
+  parentId    String?
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  // Relations
+  owner       User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  parent      Project? @relation("ProjectHierarchy", fields: [parentId], references: [id])
+  children    Project[] @relation("ProjectHierarchy")
+  tasks       Task[]
+  members     ProjectMember[]
+  webhooks    Webhook[]
+  
+  @@map("projects")
+}
+
+model ProjectMember {
+  id        String   @id @default(cuid())
+  projectId String
+  userId    String
+  role      String   @default("member") // owner, admin, member, viewer
+  joinedAt  DateTime @default(now())
+  
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user      User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@unique([projectId, userId])
+  @@map("project_members")
+}
+
+model Task {
+  id              String   @id @default(cuid())
+  title           String
+  description     String?
+  notes           String?
+  status          String   @default("todo") // todo, in_progress, completed, cancelled
+  priority        String   @default("medium") // low, medium, high, urgent
+  dueDate         DateTime?
+  startDate       DateTime?
+  completedAt     DateTime?
+  estimatedTime   Int?     // in minutes
+  actualTime      Int?     // in minutes
+  sortOrder       Int      @default(0)
+  isRecurring     Boolean  @default(false)
+  recurringRule   String?  // RRULE format
+  recurringParent String?  // ID of parent recurring task
+  location        String?
+  tags            String?  // JSON array of tags
+  customFields    String?  // JSON object for custom fields
+  isPublic        Boolean  @default(false)
+  isArchived      Boolean  @default(false)
+  projectId       String?
+  assigneeId      String?
+  createdById     String
+  parentId        String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  // Relations
+  project         Project?  @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  assignee        User?     @relation("TaskAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+  createdBy       User      @relation("TaskCreator", fields: [createdById], references: [id], onDelete: Cascade)
+  parent          Task?     @relation("TaskHierarchy", fields: [parentId], references: [id])
+  children        Task[]    @relation("TaskHierarchy")
+  comments        Comment[]
+  attachments     Attachment[]
+  timeEntries     TimeEntry[]
+  dependencies    TaskDependency[] @relation("DependentTasks")
+  dependents      TaskDependency[] @relation("DependsOnTasks")
+  reminders       Reminder[]
+  focusSessions   FocusSession[]
+  
+  @@map("tasks")
+}
+
+model TaskDependency {
+  id              String @id @default(cuid())
+  dependentTaskId String
+  dependsOnTaskId String
+  type            String @default("finish_to_start") // finish_to_start, start_to_start, finish_to_finish, start_to_finish
+  createdAt       DateTime @default(now())
+  
+  dependentTask   Task @relation("DependentTasks", fields: [dependentTaskId], references: [id], onDelete: Cascade)
+  dependsOnTask   Task @relation("DependsOnTasks", fields: [dependsOnTaskId], references: [id], onDelete: Cascade)
+  
+  @@unique([dependentTaskId, dependsOnTaskId])
+  @@map("task_dependencies")
+}
+
+model Comment {
+  id        String   @id @default(cuid())
+  content   String
+  taskId    String
+  authorId  String
+  parentId  String?  // for threaded comments
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  task      Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  author    User     @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  parent    Comment? @relation("CommentReplies", fields: [parentId], references: [id])
+  replies   Comment[] @relation("CommentReplies")
+  
+  @@map("comments")
+}
+
+model Attachment {
+  id        String   @id @default(cuid())
+  filename  String
+  originalName String
+  mimeType  String
+  size      Int
+  path      String
+  taskId    String
+  uploadedById String
+  createdAt DateTime @default(now())
+  
+  task      Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  
+  @@map("attachments")
+}
+
+model TimeEntry {
+  id          String   @id @default(cuid())
+  taskId      String
+  userId      String
+  startTime   DateTime
+  endTime     DateTime?
+  duration    Int?     // in minutes
+  description String?
+  isBillable  Boolean  @default(false)
+  hourlyRate  Float?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  task        Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  
+  @@map("time_entries")
+}
+
+model Reminder {
+  id        String   @id @default(cuid())
+  taskId    String
+  type      String   @default("notification") // notification, email, sms
+  triggerAt DateTime
+  isSent    Boolean  @default(false)
+  message   String?
+  createdAt DateTime @default(now())
+  
+  task      Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  
+  @@map("reminders")
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  title     String
+  message   String
+  type      String   @default("info") // info, success, warning, error
+  isRead    Boolean  @default(false)
+  data      String?  // JSON object for additional data
+  createdAt DateTime @default(now())
+  
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@map("notifications")
+}
+
+model Habit {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  target      Int      // target count per day/week
+  period      String   @default("daily") // daily, weekly, monthly
+  userId      String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  entries     HabitEntry[]
+  
+  @@map("habits")
+}
+
+model HabitEntry {
+  id        String   @id @default(cuid())
+  habitId   String
+  value     Int      @default(1)
+  date      DateTime
+  notes     String?
+  createdAt DateTime @default(now())
+  
+  habit     Habit    @relation(fields: [habitId], references: [id], onDelete: Cascade)
+  
+  @@unique([habitId, date])
+  @@map("habit_entries")
+}
+
+model FocusSession {
+  id          String   @id @default(cuid())
+  userId      String
+  taskId      String?
+  type        String   @default("pomodoro") // pomodoro, custom, break
+  duration    Int      // in minutes
+  startTime   DateTime
+  endTime     DateTime?
+  isCompleted Boolean  @default(false)
+  notes       String?
+  createdAt   DateTime @default(now())
+  
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  task        Task?    @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  
+  @@map("focus_sessions")
+}
+
+model Webhook {
+  id        String   @id @default(cuid())
+  projectId String
+  url       String
+  events    String   // JSON array of events
+  secret    String?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  
+  @@map("webhooks")
+}
+
+model ApiKey {
+  id          String   @id @default(cuid())
+  userId      String
+  name        String
+  key         String   @unique
+  permissions String   // JSON array of permissions
+  lastUsedAt  DateTime?
+  expiresAt   DateTime?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@map("api_keys")
+}
